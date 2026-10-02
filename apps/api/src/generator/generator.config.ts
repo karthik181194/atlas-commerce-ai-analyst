@@ -1,9 +1,15 @@
+import { PRODUCTION_DATASET } from './generator.production.config';
+
 export const DEVELOPMENT_DATASET = {
   seed: 20250915,
   customers: 10,
-  products: 5,
+  products: 6,
   orders: 20,
   campaigns: 4,
   datasetStartDate: '2023-03-01',
   asOfDate: '2025-09-15',
 } as const;
+
+export const ACTIVE_DATASET = process.env.DATASET_ENV === 'production' 
+  ? PRODUCTION_DATASET 
+  : DEVELOPMENT_DATASET;

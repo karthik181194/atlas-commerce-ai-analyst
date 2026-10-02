@@ -1,4 +1,4 @@
-import { DEVELOPMENT_DATASET } from '../generator.config';
+import { ACTIVE_DATASET } from '../generator.config';
 import { generateReferenceData } from '../reference-data/reference-data';
 import { generateCustomers } from '../customers/customer-generator';
 import { generateCampaignData } from '../campaigns/campaign-generator';
@@ -76,7 +76,7 @@ describe('order generator', () => {
 
   describe('counts', () => {
     it('generates exactly the configured number of orders', () => {
-      expect(data.orders).toHaveLength(DEVELOPMENT_DATASET.orders);
+      expect(data.orders).toHaveLength(ACTIVE_DATASET.orders);
     });
 
     it('generates at least one order item', () => {
@@ -87,7 +87,7 @@ describe('order generator', () => {
       const ids = data.orders.map((o) => o.orderId);
       expect(new Set(ids).size).toBe(ids.length);
       expect(ids).toEqual(
-        Array.from({ length: DEVELOPMENT_DATASET.orders }, (_, i) => i + 1),
+        Array.from({ length: ACTIVE_DATASET.orders }, (_, i) => i + 1),
       );
     });
 
@@ -149,8 +149,8 @@ describe('order generator', () => {
   describe('dates', () => {
     it('every order date is within the dataset period', () => {
       data.orders.forEach((o) => {
-        expect(o.orderDate >= DEVELOPMENT_DATASET.datasetStartDate).toBe(true);
-        expect(o.orderDate <= DEVELOPMENT_DATASET.asOfDate).toBe(true);
+        expect(o.orderDate >= ACTIVE_DATASET.datasetStartDate).toBe(true);
+        expect(o.orderDate <= ACTIVE_DATASET.asOfDate).toBe(true);
       });
     });
 
@@ -333,12 +333,12 @@ describe('order generator', () => {
     });
 
     it('product master unitPrice is unmodified after running generateOrderData', () => {
-      const before = generateReferenceData(DEVELOPMENT_DATASET.seed).products.map((p) => ({
+      const before = generateReferenceData(ACTIVE_DATASET.seed).products.map((p) => ({
         id: p.productId,
         price: p.unitPrice,
       }));
       generateOrderData(); // run generator — must not mutate master data
-      const after = generateReferenceData(DEVELOPMENT_DATASET.seed).products.map((p) => ({
+      const after = generateReferenceData(ACTIVE_DATASET.seed).products.map((p) => ({
         id: p.productId,
         price: p.unitPrice,
       }));
@@ -584,13 +584,13 @@ describe('order generator', () => {
 
   describe('determinism', () => {
     it('same seed → identical orders and items on repeated calls', () => {
-      expect(generateOrderData(DEVELOPMENT_DATASET.seed)).toEqual(
-        generateOrderData(DEVELOPMENT_DATASET.seed),
+      expect(generateOrderData(ACTIVE_DATASET.seed)).toEqual(
+        generateOrderData(ACTIVE_DATASET.seed),
       );
     });
 
     it('different seed → different orders', () => {
-      const alt = generateOrderData(DEVELOPMENT_DATASET.seed + 1);
+      const alt = generateOrderData(ACTIVE_DATASET.seed + 1);
       expect(alt.orders).not.toEqual(data.orders);
     });
   });

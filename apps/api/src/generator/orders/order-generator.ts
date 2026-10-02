@@ -1,4 +1,4 @@
-import { DEVELOPMENT_DATASET } from '../generator.config';
+import { ACTIVE_DATASET } from '../generator.config';
 import { DeterministicRandom } from '../deterministic-random';
 import { generateReferenceData } from '../reference-data/reference-data';
 import { generateCustomers } from '../customers/customer-generator';
@@ -275,8 +275,8 @@ function generateOrderDate(
   random: DeterministicRandom,
   customer: Customer,
 ): string {
-  const datasetStartMs = Date.parse(`${DEVELOPMENT_DATASET.datasetStartDate}T00:00:00Z`);
-  const datasetEndMs = Date.parse(`${DEVELOPMENT_DATASET.asOfDate}T00:00:00Z`);
+  const datasetStartMs = Date.parse(`${ACTIVE_DATASET.datasetStartDate}T00:00:00Z`);
+  const datasetEndMs = Date.parse(`${ACTIVE_DATASET.asOfDate}T00:00:00Z`);
   const customerStartMs = Math.max(
     datasetStartMs,
     Date.parse(`${customer.signupDate}T00:00:00Z`),
@@ -284,9 +284,9 @@ function generateOrderDate(
 
   // Edge case: customer joined on or after asOfDate
   if (customerStartMs >= datasetEndMs) {
-    return customer.signupDate <= DEVELOPMENT_DATASET.asOfDate
+    return customer.signupDate <= ACTIVE_DATASET.asOfDate
       ? customer.signupDate
-      : DEVELOPMENT_DATASET.datasetStartDate;
+      : ACTIVE_DATASET.datasetStartDate;
   }
 
   interface MonthBucket {
@@ -321,7 +321,7 @@ function generateOrderDate(
     cursor = new Date(nextMonthMs);
   }
 
-  if (buckets.length === 0) return DEVELOPMENT_DATASET.datasetStartDate;
+  if (buckets.length === 0) return ACTIVE_DATASET.datasetStartDate;
 
   const bucket = buckets[selectWeighted(random, buckets.map((b) => b.weight))];
   const day = random.nextInt(bucket.startDay, bucket.endDay);
@@ -331,7 +331,7 @@ function generateOrderDate(
 // ─── Main generator ─────────────────────────────────────────────────────────
 
 /**
- * Generates exactly DEVELOPMENT_DATASET.orders orders and their items.
+ * Generates exactly ACTIVE_DATASET.orders orders and their items.
  *
  * All randomness flows through one DeterministicRandom instance seeded with
  * `seed`.  Same seed → identical output; different seed → different output.
@@ -339,7 +339,7 @@ function generateOrderDate(
  * Does NOT connect to PostgreSQL.
  * Does NOT generate returns or inventory events.
  */
-export function generateOrderData(seed: number = DEVELOPMENT_DATASET.seed): OrderData {
+export function generateOrderData(seed: number = ACTIVE_DATASET.seed): OrderData {
   const random = new DeterministicRandom(seed);
   const ref = generateReferenceData(seed);
   const customers = generateCustomers(seed);
@@ -363,7 +363,10 @@ export function generateOrderData(seed: number = DEVELOPMENT_DATASET.seed): Orde
   const orderItems: OrderItem[] = [];
   let orderItemId = 1;
 
-  for (let orderIdx = 0; orderIdx < DEVELOPMENT_DATASET.orders; orderIdx++) {
+  // Cache to avoid O(Orders * Products) parsing of dates
+  const weightCache = new Map<string, number[]>();
+
+  for (let orderIdx = 0; orderIdx < ACTIVE_DATASET.orders; orderIdx++) {
     // ── 1. Customer (segment-frequency weighted) ─────────────────────────
     const customerIndex = selectWeighted(random, customerWeights);
     const customer = customers[customerIndex];
@@ -395,16 +398,21 @@ export function generateOrderData(seed: number = DEVELOPMENT_DATASET.seed): Orde
       itemCount = random.nextInt(4, 5); // 10 %
     }
 
-    // ── 7. Product weights for this order context ─────────────────────────
-    const productWeights = ref.products.map((product, index) =>
-      getSeasonalProductWeight(
-        product,
-        index,
-        orderDate,
-        fulfillingWarehouseId,
-        categoryIds,
-      ),
-    );
+    // ── 7. Product weights for this order context (CACHED) ───────────────
+    const cacheKey = `${orderDate}_${fulfillingWarehouseId}`;
+    let productWeights = weightCache.get(cacheKey);
+    if (!productWeights) {
+      productWeights = ref.products.map((product, index) =>
+        getSeasonalProductWeight(
+          product,
+          index,
+          orderDate,
+          fulfillingWarehouseId,
+          categoryIds,
+        ),
+      );
+      weightCache.set(cacheKey, productWeights);
+    }
 
     // ── 8. Generate items ─────────────────────────────────────────────────
     const generatedItems: OrderItem[] = [];

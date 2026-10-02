@@ -1,4 +1,4 @@
-import { DEVELOPMENT_DATASET } from '../generator.config';
+import { ACTIVE_DATASET } from '../generator.config';
 import { DeterministicRandom } from '../deterministic-random';
 import type { CustomerSegment, Product, ProductCategory, ReferenceData, Region, Warehouse } from './types';
 
@@ -16,20 +16,27 @@ const productWords = ['Aster', 'Luma', 'Nori', 'Vela', 'Kivo', 'Mira', 'Sola', '
 
 function money(cents: number): number { return Number((cents / 100).toFixed(2)); }
 function launchDate(random: DeterministicRandom): string {
-  const start = Date.parse(`${DEVELOPMENT_DATASET.datasetStartDate}T00:00:00Z`);
-  const end = Date.parse(`${DEVELOPMENT_DATASET.asOfDate}T00:00:00Z`);
+  const start = Date.parse(`${ACTIVE_DATASET.datasetStartDate}T00:00:00Z`);
+  const end = Date.parse(`${ACTIVE_DATASET.asOfDate}T00:00:00Z`);
   const day = random.nextInt(0, Math.floor((end - start) / 86_400_000));
   return new Date(start + day * 86_400_000).toISOString().slice(0, 10);
 }
 function generateProducts(seed: number, count: number): Product[] {
   const random = new DeterministicRandom(seed);
-  return Array.from({ length: count }, (_, index) => {
+  const randomCount = count - 1;
+  const products: Product[] = Array.from({ length: randomCount }, (_, index) => {
     const category = productCategories[random.nextInt(0, productCategories.length - 1)];
     const priceCents = random.nextInt(1_000, 20_000);
     const costCents = Math.round(priceCents * (10_000 - category.targetMarginBps) / 10_000);
     return { productId: index + 1, productName: `${productWords[random.nextInt(0, productWords.length - 1)]} ${category.categoryName} ${index + 1}`, categoryId: category.categoryId, unitPrice: money(priceCents), unitCost: money(costCents), launchDate: launchDate(random), isActive: true };
   });
+  // Deterministic AquaFlow Blender — always the last product (Kitchen & Dining, V1 quality event target)
+  const kitchenCategory = productCategories.find((c) => c.categoryName === 'Kitchen & Dining')!;
+  const aquaflowPriceCents = 8999;
+  const aquaflowCostCents = Math.round(aquaflowPriceCents * (10_000 - kitchenCategory.targetMarginBps) / 10_000);
+  products.push({ productId: count, productName: 'AquaFlow Blender', categoryId: kitchenCategory.categoryId, unitPrice: money(aquaflowPriceCents), unitCost: money(aquaflowCostCents), launchDate: '2024-03-15', isActive: true });
+  return products;
 }
-export function generateReferenceData(seed: number = DEVELOPMENT_DATASET.seed): ReferenceData {
-  return { warehouses, regions, customerSegments, productCategories, products: generateProducts(seed, DEVELOPMENT_DATASET.products) };
+export function generateReferenceData(seed: number = ACTIVE_DATASET.seed): ReferenceData {
+  return { warehouses, regions, customerSegments, productCategories, products: generateProducts(seed, ACTIVE_DATASET.products) };
 }

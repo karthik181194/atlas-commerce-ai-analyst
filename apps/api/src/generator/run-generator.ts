@@ -1,4 +1,4 @@
-import { DEVELOPMENT_DATASET } from './generator.config';
+import { ACTIVE_DATASET } from './generator.config';
 import { formatGeneratorOutput } from './generator-runner';
 
-console.log(formatGeneratorOutput(DEVELOPMENT_DATASET.seed));
+console.log(formatGeneratorOutput(ACTIVE_DATASET.seed));

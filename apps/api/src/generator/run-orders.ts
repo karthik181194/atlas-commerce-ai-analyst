@@ -2,7 +2,7 @@ import { generateOrderData } from './orders/order-generator';
 import { generateReferenceData } from './reference-data/reference-data';
 import { generateCustomers } from './customers/customer-generator';
 import { generateCampaignData } from './campaigns/campaign-generator';
-import { DEVELOPMENT_DATASET } from './generator.config';
+import { ACTIVE_DATASET } from './generator.config';
 
 const ref = generateReferenceData();
 const customers = generateCustomers();
@@ -162,8 +162,8 @@ console.log(
 const dateErrors = data.orders.filter((o) => {
   const customer = customerMap.get(o.customerId)!;
   return (
-    o.orderDate < DEVELOPMENT_DATASET.datasetStartDate ||
-    o.orderDate > DEVELOPMENT_DATASET.asOfDate ||
+    o.orderDate < ACTIVE_DATASET.datasetStartDate ||
+    o.orderDate > ACTIVE_DATASET.asOfDate ||
     o.orderDate < customer.signupDate
   );
 });
@@ -177,7 +177,7 @@ const deterministic = JSON.stringify(data) === JSON.stringify(data2);
 console.log(`Determinism (same seed):   ${deterministic ? '✓ PASS' : '✗ FAIL'}`);
 
 // 7. Seed-sensitivity
-const dataDiff = generateOrderData(DEVELOPMENT_DATASET.seed + 1);
+const dataDiff = generateOrderData(ACTIVE_DATASET.seed + 1);
 const seedSensitive = JSON.stringify(dataDiff.orders) !== JSON.stringify(data.orders);
 console.log(`Seed-sensitivity:          ${seedSensitive ? '✓ PASS' : '✗ FAIL'}`);
 

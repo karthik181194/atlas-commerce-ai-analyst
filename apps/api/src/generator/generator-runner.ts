@@ -1,10 +1,10 @@
-import { DEVELOPMENT_DATASET } from './generator.config';
+import { ACTIVE_DATASET } from './generator.config';
 import { DeterministicRandom } from './deterministic-random';
 
 const SAMPLE_VALUE_COUNT = 5;
 
 export function generateTestValues(
-  seed: number = DEVELOPMENT_DATASET.seed,
+  seed: number = ACTIVE_DATASET.seed,
 ): number[] {
   const random = new DeterministicRandom(seed);
 
@@ -12,7 +12,7 @@ export function generateTestValues(
 }
 
 export function formatGeneratorOutput(
-  seed: number = DEVELOPMENT_DATASET.seed,
+  seed: number = ACTIVE_DATASET.seed,
 ): string {
   const values = generateTestValues(seed);
 
