@@ -35,7 +35,7 @@ async function bootstrap() {
     };
 
     const service = app.get(BusinessAnalystService);
-    const question = 'Show August 2025 revenue';
+    const question = 'Why did August 2025 revenue change?';
     console.log(`\nStarting execution for question: "${question}"`);
     
     const result = await service.answer(question);
