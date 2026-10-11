@@ -114,6 +114,14 @@ export class AnalyticsRouter {
             request.params,
           ),
         };
+
+      case 'inventory_stockout_analysis':
+        return {
+          capability: request.capability,
+          data: await this.analyticsService.inventoryStockoutAnalysis(
+            request.params,
+          ),
+        };
     }
   }
 }

@@ -370,4 +370,378 @@ export class AnalyticsService {
     `;
     return this.queryService.executeQuery(sql, [startDate, endDate]);
   }
+
+  // 15. inventory_stockout_analysis
+  async inventoryStockoutAnalysis({ startDate, endDate }: T.DateRange): Promise<T.InventoryStockoutAnalysisResult> {
+    const eventsSql = `
+      WITH shortage_raw AS (
+        SELECT 
+          s.product_id,
+          s.warehouse_id,
+          s.event_date::date as raw_start,
+          e.event_date::date as raw_end
+        FROM inventory_events s
+        LEFT JOIN LATERAL (
+          SELECT e.event_date
+          FROM inventory_events e
+          WHERE e.product_id = s.product_id
+            AND e.warehouse_id = s.warehouse_id
+            AND e.event_type = 'shortage_end'
+            AND e.event_date >= s.event_date
+          ORDER BY e.event_date ASC
+          LIMIT 1
+        ) e ON true
+        WHERE s.event_type = 'shortage_start'
+      )
+      SELECT 
+        sr.product_id as "productId",
+        p.product_name as "productName",
+        p.category_id as "categoryId",
+        pc.category_name as "categoryName",
+        sr.warehouse_id as "warehouseId",
+        w.warehouse_name as "warehouseName",
+        r.region_id as "regionId",
+        r.region_name as "regionName",
+        to_char(GREATEST(sr.raw_start, $1::date), 'YYYY-MM-DD') as "stockoutStart",
+        CASE 
+          WHEN sr.raw_end IS NOT NULL AND sr.raw_end <= $2::date THEN to_char(sr.raw_end, 'YYYY-MM-DD')
+          ELSE NULL 
+        END as "stockoutEnd",
+        ((LEAST(COALESCE(sr.raw_end, $2::date), $2::date) - GREATEST(sr.raw_start, $1::date)) + 1)::integer as "stockoutDays"
+      FROM shortage_raw sr
+      JOIN products p ON sr.product_id = p.product_id
+      JOIN product_categories pc ON p.category_id = pc.category_id
+      JOIN warehouses w ON sr.warehouse_id = w.warehouse_id
+      LEFT JOIN LATERAL (
+        SELECT reg.region_id, reg.region_name 
+        FROM regions reg 
+        WHERE reg.default_warehouse_id = w.warehouse_id 
+        ORDER BY reg.region_id ASC 
+        LIMIT 1
+      ) r ON true
+      WHERE sr.raw_start <= $2::date 
+        AND (sr.raw_end IS NULL OR sr.raw_end >= $1::date)
+      ORDER BY "stockoutStart" ASC, "warehouseName" ASC, "productName" ASC
+    `;
+    const stockoutEventsRaw = await this.queryService.executeQuery(eventsSql, [startDate, endDate]);
+
+    if (!stockoutEventsRaw || stockoutEventsRaw.length === 0) {
+      return {
+        summary: {
+          stockoutEventCount: 0,
+          affectedProductCount: 0,
+          affectedCategoryCount: 0,
+          affectedWarehouseCount: 0,
+          affectedProductDays: 0,
+          affectedWarehouseDays: 0,
+        },
+        stockoutEvents: [],
+        productImpact: [],
+        regionalImpact: [],
+      };
+    }
+
+    const whDaysSql = `
+      WITH shortage_raw AS (
+        SELECT 
+          s.product_id,
+          s.warehouse_id,
+          s.event_date::date as raw_start,
+          e.event_date::date as raw_end
+        FROM inventory_events s
+        LEFT JOIN LATERAL (
+          SELECT e.event_date
+          FROM inventory_events e
+          WHERE e.product_id = s.product_id
+            AND e.warehouse_id = s.warehouse_id
+            AND e.event_type = 'shortage_end'
+            AND e.event_date >= s.event_date
+          ORDER BY e.event_date ASC
+          LIMIT 1
+        ) e ON true
+        WHERE s.event_type = 'shortage_start'
+      ),
+      overlapping_shortages AS (
+        SELECT 
+          sr.warehouse_id,
+          r.region_id,
+          GREATEST(sr.raw_start, $1::date) as effective_start,
+          LEAST(COALESCE(sr.raw_end, $2::date), $2::date) as effective_end
+        FROM shortage_raw sr
+        JOIN warehouses w ON sr.warehouse_id = w.warehouse_id
+        LEFT JOIN LATERAL (
+          SELECT reg.region_id 
+          FROM regions reg 
+          WHERE reg.default_warehouse_id = w.warehouse_id 
+          ORDER BY reg.region_id ASC 
+          LIMIT 1
+        ) r ON true
+        WHERE sr.raw_start <= $2::date 
+          AND (sr.raw_end IS NULL OR sr.raw_end >= $1::date)
+      )
+      SELECT 
+        os.region_id as "regionId",
+        COUNT(DISTINCT (os.warehouse_id, d.day::date))::integer as "warehouseDays"
+      FROM overlapping_shortages os,
+      LATERAL generate_series(os.effective_start, os.effective_end, '1 day'::interval) d(day)
+      GROUP BY os.region_id
+    `;
+    const whDaysRows = await this.queryService.executeQuery(whDaysSql, [startDate, endDate]);
+    const totalWarehouseDays = whDaysRows.reduce((sum: number, r: any) => sum + Number(r.warehouseDays), 0);
+    const regionWarehouseDaysMap = new Map<number, number>();
+    whDaysRows.forEach((r: any) => regionWarehouseDaysMap.set(Number(r.regionId), Number(r.warehouseDays)));
+
+    const impactSql = `
+      WITH shortage_raw AS (
+        SELECT 
+          s.product_id,
+          s.warehouse_id,
+          s.event_date::date as raw_start,
+          e.event_date::date as raw_end
+        FROM inventory_events s
+        LEFT JOIN LATERAL (
+          SELECT e.event_date
+          FROM inventory_events e
+          WHERE e.product_id = s.product_id
+            AND e.warehouse_id = s.warehouse_id
+            AND e.event_type = 'shortage_end'
+            AND e.event_date >= s.event_date
+          ORDER BY e.event_date ASC
+          LIMIT 1
+        ) e ON true
+        WHERE s.event_type = 'shortage_start'
+      ),
+      overlapping_shortages AS (
+        SELECT 
+          sr.product_id,
+          p.product_name,
+          pc.category_name,
+          sr.warehouse_id,
+          w.warehouse_name,
+          r.region_id,
+          r.region_name,
+          ((LEAST(COALESCE(sr.raw_end, $2::date), $2::date) - GREATEST(sr.raw_start, $1::date)) + 1)::integer as stockout_days,
+          GREATEST(sr.raw_start, $1::date) as effective_start,
+          LEAST(COALESCE(sr.raw_end, $2::date), $2::date) as effective_end,
+          (GREATEST(sr.raw_start, $1::date) - (((LEAST(COALESCE(sr.raw_end, $2::date), $2::date) - GREATEST(sr.raw_start, $1::date)) + 1) * INTERVAL '1 day'))::date as baseline_start,
+          (GREATEST(sr.raw_start, $1::date) - INTERVAL '1 day')::date as baseline_end
+        FROM shortage_raw sr
+        JOIN products p ON sr.product_id = p.product_id
+        JOIN product_categories pc ON p.category_id = pc.category_id
+        JOIN warehouses w ON sr.warehouse_id = w.warehouse_id
+        LEFT JOIN LATERAL (
+          SELECT reg.region_id, reg.region_name 
+          FROM regions reg 
+          WHERE reg.default_warehouse_id = w.warehouse_id 
+          ORDER BY reg.region_id ASC 
+          LIMIT 1
+        ) r ON true
+        WHERE sr.raw_start <= $2::date 
+          AND (sr.raw_end IS NULL OR sr.raw_end >= $1::date)
+      ),
+      stockout_sales AS (
+        SELECT 
+          os.product_id,
+          os.warehouse_id,
+          COUNT(DISTINCT o.order_id) as orders_count,
+          COALESCE(SUM(oi.quantity * oi.unit_price_at_purchase), 0) as gross_rev
+        FROM overlapping_shortages os
+        JOIN orders o ON o.fulfilling_warehouse_id = os.warehouse_id
+          AND o.order_status = 'completed'
+          AND o.order_date::date >= os.effective_start 
+          AND o.order_date::date <= os.effective_end
+        JOIN order_items oi ON o.order_id = oi.order_id AND oi.product_id = os.product_id
+        GROUP BY os.product_id, os.warehouse_id
+      ),
+      stockout_refunds AS (
+        SELECT 
+          os.product_id,
+          os.warehouse_id,
+          COALESCE(SUM(r.refund_amount), 0) as refunds
+        FROM overlapping_shortages os
+        JOIN orders o ON o.fulfilling_warehouse_id = os.warehouse_id
+        JOIN order_items oi ON o.order_id = oi.order_id AND oi.product_id = os.product_id
+        JOIN returns r ON oi.order_item_id = r.order_item_id
+          AND r.processed_date::date >= os.effective_start 
+          AND r.processed_date::date <= os.effective_end
+        GROUP BY os.product_id, os.warehouse_id
+      ),
+      baseline_sales AS (
+        SELECT 
+          os.product_id,
+          os.warehouse_id,
+          COUNT(DISTINCT o.order_id) as orders_count,
+          COALESCE(SUM(oi.quantity * oi.unit_price_at_purchase), 0) as gross_rev
+        FROM overlapping_shortages os
+        JOIN orders o ON o.fulfilling_warehouse_id = os.warehouse_id
+          AND o.order_status = 'completed'
+          AND o.order_date::date >= os.baseline_start 
+          AND o.order_date::date <= os.baseline_end
+        JOIN order_items oi ON o.order_id = oi.order_id AND oi.product_id = os.product_id
+        GROUP BY os.product_id, os.warehouse_id
+      ),
+      baseline_refunds AS (
+        SELECT 
+          os.product_id,
+          os.warehouse_id,
+          COALESCE(SUM(r.refund_amount), 0) as refunds
+        FROM overlapping_shortages os
+        JOIN orders o ON o.fulfilling_warehouse_id = os.warehouse_id
+        JOIN order_items oi ON o.order_id = oi.order_id AND oi.product_id = os.product_id
+        JOIN returns r ON oi.order_item_id = r.order_item_id
+          AND r.processed_date::date >= os.baseline_start 
+          AND r.processed_date::date <= os.baseline_end
+        GROUP BY os.product_id, os.warehouse_id
+      )
+      SELECT 
+        os.product_id as "productId",
+        os.product_name as "productName",
+        os.category_name as "categoryName",
+        os.warehouse_id as "warehouseId",
+        os.warehouse_name as "warehouseName",
+        os.region_id as "regionId",
+        os.region_name as "regionName",
+        os.stockout_days as "stockoutDays",
+        (COALESCE(ss.gross_rev, 0) - COALESCE(sr.refunds, 0))::numeric(12,2) as "stockoutPeriodRevenue",
+        (COALESCE(bs.gross_rev, 0) - COALESCE(br.refunds, 0))::numeric(12,2) as "baselineRevenue",
+        COALESCE(ss.orders_count, 0)::integer as "stockoutPeriodOrders",
+        COALESCE(bs.orders_count, 0)::integer as "baselineOrders"
+      FROM overlapping_shortages os
+      LEFT JOIN stockout_sales ss ON os.product_id = ss.product_id AND os.warehouse_id = ss.warehouse_id
+      LEFT JOIN stockout_refunds sr ON os.product_id = sr.product_id AND os.warehouse_id = sr.warehouse_id
+      LEFT JOIN baseline_sales bs ON os.product_id = bs.product_id AND os.warehouse_id = bs.warehouse_id
+      LEFT JOIN baseline_refunds br ON os.product_id = br.product_id AND os.warehouse_id = br.warehouse_id
+      ORDER BY "baselineRevenue" DESC, "productId" ASC
+    `;
+    const impactRows = await this.queryService.executeQuery(impactSql, [startDate, endDate]);
+
+    const productImpact: T.ProductStockoutImpactItem[] = [];
+    const regionalMap = new Map<number, {
+      regionId: number;
+      regionName: string;
+      warehouses: Set<number>;
+      products: Set<number>;
+      stockoutDays: number;
+      affectedPeriodRevenue: number;
+      baselineRevenue: number;
+    }>();
+
+    for (const row of impactRows) {
+      const productId = Number(row.productId);
+      const warehouseId = Number(row.warehouseId);
+      const regionId = Number(row.regionId);
+      const stockoutDays = Number(row.stockoutDays);
+      const stockoutPeriodRevenue = Math.round(Number(row.stockoutPeriodRevenue) * 100) / 100;
+      const baselineRevenue = Math.round(Number(row.baselineRevenue) * 100) / 100;
+      const stockoutPeriodOrders = Number(row.stockoutPeriodOrders);
+      const baselineOrders = Number(row.baselineOrders);
+
+      const revenueChangePercentage = baselineRevenue > 0
+        ? Math.round(((stockoutPeriodRevenue - baselineRevenue) / baselineRevenue) * 10000) / 100
+        : null;
+
+      const orderChangePercentage = baselineOrders > 0
+        ? Math.round(((stockoutPeriodOrders - baselineOrders) / baselineOrders) * 10000) / 100
+        : null;
+
+      const baselineDailyRevenue = stockoutDays > 0
+        ? Math.round((baselineRevenue / stockoutDays) * 10000) / 10000
+        : 0;
+
+      const baselineDailyOrders = stockoutDays > 0
+        ? Math.round((baselineOrders / stockoutDays) * 10000) / 10000
+        : 0;
+
+      productImpact.push({
+        productId,
+        productName: row.productName,
+        categoryName: row.categoryName,
+        warehouseId,
+        warehouseName: row.warehouseName,
+        regionName: row.regionName,
+        stockoutDays,
+        stockoutPeriodRevenue,
+        baselineRevenue,
+        stockoutPeriodOrders,
+        baselineOrders,
+        revenueChangePercentage,
+        orderChangePercentage,
+        baselineDailyRevenue,
+        baselineDailyOrders,
+      });
+
+      if (!regionalMap.has(regionId)) {
+        regionalMap.set(regionId, {
+          regionId,
+          regionName: row.regionName,
+          warehouses: new Set(),
+          products: new Set(),
+          stockoutDays: regionWarehouseDaysMap.get(regionId) || stockoutDays,
+          affectedPeriodRevenue: 0,
+          baselineRevenue: 0,
+        });
+      }
+      const reg = regionalMap.get(regionId)!;
+      reg.warehouses.add(warehouseId);
+      reg.products.add(productId);
+      reg.affectedPeriodRevenue += stockoutPeriodRevenue;
+      reg.baselineRevenue += baselineRevenue;
+    }
+
+    const regionalImpact: T.RegionalStockoutImpactItem[] = Array.from(regionalMap.values())
+      .map((r) => {
+        const affectedPeriodRevenue = Math.round(r.affectedPeriodRevenue * 100) / 100;
+        const baselineRevenue = Math.round(r.baselineRevenue * 100) / 100;
+        const revenueChangePercentage = baselineRevenue > 0
+          ? Math.round(((affectedPeriodRevenue - baselineRevenue) / baselineRevenue) * 10000) / 100
+          : null;
+
+        return {
+          regionId: r.regionId,
+          regionName: r.regionName,
+          affectedWarehouseCount: r.warehouses.size,
+          affectedProductCount: r.products.size,
+          stockoutDays: r.stockoutDays,
+          affectedPeriodRevenue,
+          baselineRevenue,
+          revenueChangePercentage,
+        };
+      })
+      .sort((a, b) => b.baselineRevenue - a.baselineRevenue);
+
+    const stockoutEvents: T.StockoutEventItem[] = stockoutEventsRaw.map((e: any) => ({
+      productId: Number(e.productId),
+      productName: e.productName,
+      categoryId: Number(e.categoryId),
+      categoryName: e.categoryName,
+      warehouseId: Number(e.warehouseId),
+      warehouseName: e.warehouseName,
+      regionId: Number(e.regionId),
+      regionName: e.regionName,
+      stockoutStart: e.stockoutStart,
+      stockoutEnd: e.stockoutEnd,
+      stockoutDays: Number(e.stockoutDays),
+    }));
+
+    const uniqueProducts = new Set(stockoutEvents.map((e) => e.productId));
+    const uniqueCategories = new Set(stockoutEvents.map((e) => e.categoryId));
+    const uniqueWarehouses = new Set(stockoutEvents.map((e) => e.warehouseId));
+    const affectedProductDays = stockoutEvents.reduce((sum, e) => sum + e.stockoutDays, 0);
+
+    const summary = {
+      stockoutEventCount: stockoutEvents.length,
+      affectedProductCount: uniqueProducts.size,
+      affectedCategoryCount: uniqueCategories.size,
+      affectedWarehouseCount: uniqueWarehouses.size,
+      affectedProductDays,
+      affectedWarehouseDays: totalWarehouseDays,
+    };
+
+    return {
+      summary,
+      stockoutEvents,
+      productImpact,
+      regionalImpact,
+    };
+  }
 }

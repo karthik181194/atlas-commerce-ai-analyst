@@ -16,6 +16,7 @@ export const DATE_RANGE_CAPABILITIES = [
   'customer_activity_summary',
   'segment_order_distribution',
   'category_return_metrics',
+  'inventory_stockout_analysis',
 ] as const;
 
 /** Runtime source of truth for capabilities that accept ComparisonDateRange params. */
@@ -97,5 +98,9 @@ export type AnalystRequest =
     }
   | {
       capability: 'category_return_metrics';
+      params: DateRange;
+    }
+  | {
+      capability: 'inventory_stockout_analysis';
       params: DateRange;
     };

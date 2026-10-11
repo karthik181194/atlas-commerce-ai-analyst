@@ -170,5 +170,27 @@ describe('AnalyticsRouter', () => {
     expect(result.data).toEqual(mockCategoryReturns);
     expect(service.categoryReturnMetrics).toHaveBeenCalledWith(dateRange);
   });
+
+  it('15. inventory_stockout_analysis dispatches correctly', async () => {
+    const mockStockoutResult = {
+      summary: {
+        stockoutEventCount: 1,
+        affectedProductCount: 1,
+        affectedCategoryCount: 1,
+        affectedWarehouseCount: 1,
+        affectedProductDays: 22,
+        affectedWarehouseDays: 22,
+      },
+      stockoutEvents: [],
+      productImpact: [],
+      regionalImpact: [],
+    };
+    (service.inventoryStockoutAnalysis as any) = jest.fn().mockResolvedValue(mockStockoutResult);
+
+    const result = await router.execute({ capability: 'inventory_stockout_analysis', params: dateRange });
+    expect(result.capability).toBe('inventory_stockout_analysis');
+    expect(result.data).toEqual(mockStockoutResult);
+    expect(service.inventoryStockoutAnalysis).toHaveBeenCalledWith(dateRange);
+  });
 });
 
